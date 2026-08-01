@@ -21,14 +21,15 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: camera_knowledge_app
+    env_file: .env
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=camera_knowledge_db
       - POSTGRES_USER=postgres
-      - LLM_URL=${LLM_URL:-http://localhost:11434/v1}
-      - API_KEY=${API_KEY:-ollama}
-      - MODEL=${MODEL:-llama3.2}
+      - LLM_URL=${LLM_BASE_URL:-http://localhost:11434/v1}
+      - API_KEY=${LLM_API_KEY:-ollama}
+      - MODEL=${LLM_MODEL:-llama3.2}
     depends_on:
       postgres:
         condition: service_healthy
