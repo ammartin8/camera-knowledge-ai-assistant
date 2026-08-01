@@ -1,7 +1,6 @@
 """Database feedback functions using psycopg.
 
 Provides functions to save user feedback (thumbs up/down) for conversations.
-Similar to reference db_feedback.py in LLM Zoomcamp.
 Score: -1 = down, 0 = neutral, +1 = up
 """
 

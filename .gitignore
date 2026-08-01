@@ -39,6 +39,8 @@ output/
 .scratch/
 PROJECT_SPEC.md
 SETUP.md
+tests/
+pytest.ini
 
 ### Data ###
 *.csv

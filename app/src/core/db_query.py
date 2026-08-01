@@ -4,6 +4,7 @@ Provides functions to retrieve conversations and statistics from PostgreSQL.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List, Optional
 import psycopg
 

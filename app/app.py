@@ -12,8 +12,8 @@ from dataclasses import asdict
 from psycopg.rows import DictRow
 from dotenv import load_dotenv
 
-from db_query import get_conversations, get_stats
-from db_feedback import save_feedback
+from src.core.db_query import get_conversations, get_stats
+from src.core.db_feedback import save_feedback
 
 # Load environment variables
 load_dotenv()
