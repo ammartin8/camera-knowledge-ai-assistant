@@ -26,7 +26,7 @@ The assistant provides clear, grounded answers with citations from the official 
 - Natural language Q&A about camera settings
 - Step-by-step menu navigation instructions
 - Explanations in accessible language
-- Citations linking back to source sections
+- Citation dropdown showing source documentation links
 
 ### Monitoring Dashboard (Streamlit)
 - Query volume over time
@@ -75,12 +75,13 @@ docker-compose up -d
 Edit `.env` to configure:
 
 ```bash
-# LLM Configuration
-LLM_URL
-API_KEY
-MODEL
-
+# LLM Configuration (Ollama default)
+LLM_API_KEY=ollama
+MODEL="llama3.2"
+EMBEDDING_USE_MOCK=0
 ```
+
+See `.env.example` for all available options.
 
 ## 🧪 Example Queries
 
@@ -121,10 +122,13 @@ Try these sample questions:
 camera-knowledge-ai-assistant/
 ├── app/
 │   ├── src/
-│   │   ├── core/              # Interfaces and abstractions
-│   │   ├── ingestion/         # PDF processing
-│   │   ├── retrieval/         # Search implementations
-│   │   └── integration/       # LLM and monitoring
+│   │   ├── core/              # RAG pipeline, database, LLM client
+│   │   ├── embedding_generator.py    # Text-to-embeddings conversion
+│   │   ├── llm_client.py     # LLM API wrapper (OpenAI/Ollama)
+│   │   ├── vector_store.py   # Vector search abstraction
+│   │   └── sqlite_vector_store.py  # SQLite-based vector store
+│   ├── main.py               # Streamlit entry point
+│   ├── load_data.py          # PDF ingestion script
 │   └── Dockerfile
 ├── .env.example               # Environment template
 ├── docker-compose.yml         # Service definitions
