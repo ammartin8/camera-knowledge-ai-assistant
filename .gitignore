@@ -41,6 +41,9 @@ PROJECT_SPEC.md
 SETUP.md
 tests/
 pytest.ini
+docs/
+models/
+demo*.py
 
 ### Data ###
 *.csv
@@ -55,6 +58,7 @@ pytest.ini
 *.tax2010
 *.vcf
 *.xml
+data/
 
 ### Database ###
 *.accdb

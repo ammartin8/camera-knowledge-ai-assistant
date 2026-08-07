@@ -9,8 +9,6 @@ from dataclasses import dataclass
 import os
 import tempfile
 import sqlite3
-import hashlib
-from datetime import datetime
 
 if TYPE_CHECKING:
     from langchain_core.documents import Document as LCDocument

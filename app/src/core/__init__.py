@@ -1,26 +1,45 @@
 """Core module utilities and database helpers."""
 
-from .database import get_connection, create_schema
-from .db_feedback import save_feedback, get_feedback
-from .db_query import Stats, LLMCallRecord, get_conversations, get_stats, get_feedback_summary
-from .metrics import calculate_cost, RAGWithMetrics
-from .rag_helper import RAGConfig, RAGBase, RAGVector, RAGPgVector, LMStudioRAG
+from .database import (
+    get_connection,
+    create_schema,
+    save_feedback,
+    get_feedback,
+    get_conversations,
+    get_stats,
+    get_feedback_summary,
+    calculate_cost,
+    Stats,
+    track_llm_call,
+)
+from .rag_pipeline import RAGPipeline, RAGPipelineConfig
+
+# Import new vector search modules
+try:
+    from ..embedding_generator import EmbeddingGenerator, NomicEmbeddingGenerator, MxbaiEmbeddingGenerator
+    from ..vector_search_index import PersistentVectorStoreIndex, InMemoryVectorStoreIndex
+except ImportError:
+    print("Warning: Vector search modules not available")
 
 __all__ = [
     "get_connection",
     "create_schema",
     "save_feedback",
     "get_feedback",
-    "Stats",
-    "LLMCallRecord",
     "get_conversations",
     "get_stats",
     "get_feedback_summary",
     "calculate_cost",
-    "RAGWithMetrics",
-    "RAGConfig",
-    "RAGBase",
-    "RAGVector",
-    "RAGPgVector",
-    "LMStudioRAG",
+    "Stats",
+    "track_llm_call",
+    # RAG Pipeline
+    "RAGPipeline",
+    "RAGPipelineConfig",
+    # Vector search exports
+    "EmbeddingGenerator",
+    "NomicEmbeddingGenerator",
+    "MxbaiEmbeddingGenerator",
+    "PersistentVectorStoreIndex",
+    "InMemoryVectorStoreIndex",
 ]
+

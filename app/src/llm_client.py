@@ -11,6 +11,44 @@ from typing import Optional, Dict
 from dataclasses import dataclass
 import time
 
+LLM_SYSTEM_PROMPT = """You are an expert camera documentation assistant. Help users with photography equipment, settings, and techniques.
+
+PURPOSE: Provide accurate, actionable information about cameras, lenses, exposure, and photographic best practices.
+
+GUIDELINES:
+- Be factual, cite verified specs when possible
+- Explain technical terms briefly (aperture, shutter speed, ISO)
+- Give practical examples with specific settings
+- Use clear bullet points for structure
+- Maintain professional but encouraging tone
+
+RESPONSE FORMAT:
+- Keep answers concise (3-5 key points)
+- Use bullets for lists/comparisons
+- Include specific examples when discussing settings
+- End with brief summary or next steps if helpful
+
+TOPICS:
+- Camera systems (DSLR, mirrorless, film)
+- Lenses (prime, zoom, telephoto, wide-angle, macro)
+- Exposure triangle (aperture, shutter speed, ISO)
+- Focus modes, image stabilization
+- RAW vs JPEG, color science, white balance
+
+AVOID:
+- Generic advice without context
+- Assuming specific models unless specified
+- Presenting opinions as facts
+
+EXAMPLES:
+User: "What aperture for portraits?"
+Assistant: "Use f/1.8-f/2.8 for background blur. Wider apertures (lower numbers) with fast lenses."
+
+User: "Why is my JPEG noisy?"
+Assistant: "High ISO above 3200 introduces noise. Lower ISO when possible, use noise reduction in post."
+
+GOAL: Help photographers make informed equipment and technique decisions."""
+
 
 @dataclass
 class TokenUsage:
@@ -101,10 +139,7 @@ class MockLLMClient(LLMClientInterface):
 
     def calculate_cost(self, usage: TokenUsage) -> float:
         """Calculate cost - returns 0 for local models."""
-        # Example pricing (adjust based on actual API costs)
-        if "gpt" in self.model.lower():
-            return (usage.prompt_tokens * 0.000015 + 
-                   usage.completion_tokens * 0.00003) / 1000
+        # Local models don't charge
         return 0.0
 
 
@@ -148,8 +183,8 @@ class OpenAILLMClient(LLMClientInterface):
                  model: Optional[str] = None):
         # Load from environment variables if not provided
         import os
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "ollama")
-        self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+        self.api_key = api_key or os.getenv("LLM_API_KEY", "ollama")
+        self.base_url = base_url or os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
         self.model = model or os.getenv("LLM_MODEL", "llama3.2")
         
         try:
@@ -171,20 +206,20 @@ class OpenAILLMClient(LLMClientInterface):
         
         try:
             # Send to OpenAI-compatible endpoint using chat completions API
-            response = self.client.chat.completions.create(  # type: ignore
+            response = self.client.chat.completions.create(  
                 model=self.model or "gpt-4o",  # Fallback to default if None
                 messages=[
-                    {"role": "system", "content": "You are a helpful camera documentation assistant."},
+                    {"role": "system", "content": LLM_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.2,  # Lower temperature for factual accuracy
                 timeout=120
             )
             
-            llm_response: str = response.choices[0].message.content  # type: ignore
+            llm_response: str = response.choices[0].message.content  
             
             # Get actual token usage from API (handle None safely)
-            usage_data = response.usage if response.usage else TokenUsage(0, 0, 0)  # type: ignore
+            usage_data = response.usage if response.usage else TokenUsage(0, 0, 0)  
             usage = TokenUsage(
                 prompt_tokens=usage_data.prompt_tokens or 0,
                 completion_tokens=usage_data.completion_tokens or 0,
@@ -226,7 +261,7 @@ class OpenAILLMClient(LLMClientInterface):
             Number of tokens
         """
         try:
-            from tiktoken import get_encoding  # type: ignore
+            from tiktoken import get_encoding  
             encoding = get_encoding("cl100k_base")
             return len(encoding.encode(text))
         except (ImportError, AttributeError):
@@ -234,18 +269,13 @@ class OpenAILLMClient(LLMClientInterface):
             return len(text) // 4
 
     def calculate_cost(self, usage: TokenUsage) -> float:
-        """Calculate cost based on pricing configuration.
+        """Calculate cost based on token usage.
         
-        Supports multiple pricing strategies:
+        Uses environment variables for custom rates if set:
+        - LLM_INPUT_RATE: Cost per input token (default: $0.000015)
+        - LLM_OUTPUT_RATE: Cost per output token (default: $0.00003)
         
-        1. **Custom rates via environment** (recommended for flexibility):
-           OPENAI_INPUT_RATE=0.000005    # $ per token
-           OPENAI_OUTPUT_RATE=0.000015   # $ per token
-           
-        2. **Model-specific pricing map** (JSON in env):
-           OPENAI_PRICING_MAP='{"gpt-4o":{"input":0.000005,"output":0.000015}, "groq-llama3":{"input":0,"output":0}}'
-           
-        3. **Default fallback**: Uses model name matching or generic rates
+        Local models (Ollama, LM Studio) cost nothing.
         
         Args:
             usage: Token usage from an LLM call
@@ -253,75 +283,26 @@ class OpenAILLMClient(LLMClientInterface):
         Returns:
             Cost in dollars
         """
-        # Try custom pricing from environment
-        custom_rates = self._get_custom_pricing()
-        if custom_rates:
-            return self._calculate_with_custom_rates(usage, custom_rates)
-        
-        # Fallback to model name matching
-        return self._calculate_by_model_name(usage)
-    
-    def _get_custom_pricing(self) -> Optional[Dict[str, float]]:
-        """Get custom pricing configuration from environment variables."""
         import os
         
-        # Method 1: Simple rate override (applies to all models)
-        input_rate = os.getenv("OPENAI_INPUT_RATE")
-        output_rate = os.getenv("OPENAI_OUTPUT_RATE")
+        # Check for custom rates in environment
+        input_rate_str = os.getenv("LLM_INPUT_RATE")
+        output_rate_str = os.getenv("LLM_OUTPUT_RATE")
         
-        if input_rate and output_rate:
+        if input_rate_str and output_rate_str:
             try:
-                return {
-                    "input": float(input_rate),
-                    "output": float(output_rate)
-                }
+                input_rate = float(input_rate_str)
+                output_rate = float(output_rate_str)
+                return (usage.prompt_tokens * input_rate + 
+                        usage.completion_tokens * output_rate)
             except ValueError:
                 pass
         
-        # Method 2: Model-specific pricing map (JSON string)
-        pricing_map_str = os.getenv("OPENAI_PRICING_MAP")
-        if pricing_map_str:
-            try:
-                import json
-                return json.loads(pricing_map_str)
-            except (json.JSONDecodeError, ValueError):
-                pass
-        
-        return None
-    
-    def _calculate_with_custom_rates(self, usage: TokenUsage, rates: Dict[str, float]) -> float:
-        """Calculate cost using custom pricing rates."""
-        input_rate = rates.get("input", 0.0)
-        output_rate = rates.get("output", 0.0)
-        
-        return (usage.prompt_tokens * input_rate + 
-                usage.completion_tokens * output_rate)
-    
-    def _calculate_by_model_name(self, usage: TokenUsage) -> float:
-        """Calculate cost based on model name matching."""
-        model_lower = (self.model or "").lower()
-        
-        # Check for exact matches first
-        pricing_map = {
-            "gpt-4o": {"input": 0.000005, "output": 0.000015},
-            "gpt-4": {"input": 0.00003, "output": 0.00006},
-            "gpt-3.5-turbo": {"input": 0.0000015, "output": 0.000002},
-        }
-        
-        # Check if model matches any known model
-        for known_model, rates in pricing_map.items():
-            if known_model in model_lower:
-                return (usage.prompt_tokens * rates["input"] + 
-                        usage.completion_tokens * rates["output"])
-        
-        # Local models - typically free
-        if "llama" in model_lower or "mistral" in model_lower or "qwen" in model_lower:
-            return 0.0
-        
-        # Generic fallback rate (adjust based on your actual API costs)
-        # This is a reasonable default for unknown OpenAI-compatible models
-        return (usage.prompt_tokens * 0.000015 + 
-                usage.completion_tokens * 0.00003)
+        # Default rates for OpenAI-compatible models
+        default_input_rate = 0.000015
+        default_output_rate = 0.00003
+        return (usage.prompt_tokens * default_input_rate + 
+                usage.completion_tokens * default_output_rate)
 
 
 __all__ = [

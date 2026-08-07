@@ -5,16 +5,21 @@ description = "Camera Knowledge AI Assistant - RAG system for Canon EOS R6 Mark 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "huggingface-hub>=1.26.0",
     "jupyter>=1.1.1",
     "langchain-community>=0.4.2",
     "minsearch>=0.2.0",
+    "numpy>=2.5.1",
+    "onnxruntime>=1.28.0",
     "openai>=2.52.0",
     "pdfplumber>=0.11.10",
     "plotly>=6.9.0",
     "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
+    "sentence-transformers>=5.6.1",
     "streamlit>=1.60.0",
+    "torch>=2.13.0",
 ]
 
 [project.optional-dependencies]
@@ -45,5 +50,6 @@ dev = [
     "mypy>=2.3.0",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "reportlab>=5.0.0",
     "ruff>=0.16.1",
 ]
