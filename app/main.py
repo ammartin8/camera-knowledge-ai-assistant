@@ -51,7 +51,7 @@ if "show_monitoring" not in st.session_state:
 if "rag_pipeline" not in st.session_state:
     # Initialize RAG pipeline with vector store
     try:
-        config = RAGPipelineConfig(num_chunks=5, model=os.getenv("MODEL", "llama3.2"))
+        config = RAGPipelineConfig(num_chunks=5, model=os.getenv(MODEL, "llama3.2"))
         # Use existing vector store or create new one
         if "vector_store" in st.session_state:
             vector_store = st.session_state.vector_store
