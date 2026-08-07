@@ -9,13 +9,23 @@ import time
 from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from dataclasses import asdict
 from dotenv import load_dotenv
 
 from src.core.database import (
-    get_conversations,
     get_stats,
     save_feedback,
+)
+from src.monitoring_queries import (
+    get_query_volume_by_date,
+    get_response_time_by_hour,
+    get_token_usage_breakdown,
+    get_feedback_rate,
+    get_retrieval_success_rate,
+    get_aggregate_stats,
+    get_recent_conversations,
 )
 from src.core.rag_pipeline import RAGPipeline, RAGPipelineConfig
 from src.vector_store import MinsearchVectorStore
@@ -201,13 +211,17 @@ if page == "Chat":
                         cur.execute("""
                             INSERT INTO queries (
                                 question, answer, model,
+                                course, instructions, prompt,
                                 prompt_tokens, completion_tokens, total_tokens,
                                 response_time_ms, cost, timestamp
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                         """, (
                             prompt,
                             result.get("answer", ""),
                             MODEL,
+                            'camera_knowledge',  # course - default value
+                            None,  # instructions - may be empty
+                            '',  # prompt - user's original question
                             prompt_tokens,
                             completion_tokens,
                             st.session_state.metrics["total_tokens"],
@@ -267,23 +281,34 @@ if page == "Chat":
 elif page == "Monitoring":
     st.title("📊 Monitoring Dashboard")
     
-    # Set up date range filter
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=7)
+    # Sidebar filters
+    st.sidebar.header("Filters")
     
+    end_date = datetime.now()
+    max_days = st.sidebar.slider("Date Range (days)", min_value=1, max_value=30, value=7)
+    start_date = end_date - timedelta(days=max_days)
+    
+    query_type = st.sidebar.selectbox(
+        "Query Type Filter",
+        ["All", "Camera Setup", "Photography Techniques", "Maintenance", "Settings"],
+        index=0
+    )
+    
+    # Aggregate stats
     col1, col2, col3, col4 = st.columns(4)
     
     try:
-        stats = get_stats()
-        if stats:
-            col1.metric("Total conversations", stats.total or 0)
-            col2.metric("Avg response time", f"{stats.avg_response_time:.2f}s" if stats.avg_response_time else "N/A")
-            col3.metric("Total cost", f"${stats.total_cost:.4f}" if stats.total_cost else "$0.0000")
-            col4.metric("Avg tokens", f"{stats.avg_tokens or 0:,.0f}")
+        stats = get_aggregate_stats(start_date=start_date, end_date=end_date, limit_days=max_days)
+        if stats and stats["total_queries"] > 0:
+            col1.metric("Total conversations", stats["total_queries"])
+            col2.metric("Avg response time", f"{stats['avg_response_time_ms']:.2f}s")
+            col3.metric("Total cost", f"${stats['total_cost']:.4f}")
+            col4.metric("Avg tokens", f"{stats['avg_total_tokens']:,.0f}")
         else:
             st.info("No conversations yet - ask a question in the chat!")
     except Exception as e:
         st.error(f"Could not load stats: {e}")
+        stats = {}
     
     # Feedback metrics
     try:
@@ -294,27 +319,171 @@ elif page == "Monitoring":
     except Exception as e:
         pass
     
-    # Charts
-    records = get_conversations(limit=100)
-    
-    if records:
-        df = pd.DataFrame([asdict(r) for r in records])
+    # 1. Query volume over time (line chart)
+    st.subheader("📈 Query Volume Over Time")
+    try:
+        date_list = []
+        count_list = []
         
-        st.subheader("Cost over time")
-        st.line_chart(df, x="timestamp", y="cost")
-
-        st.subheader("Response time over time")
-        st.line_chart(df, x="timestamp", y="response_time")
-
-        st.subheader("Recent conversations")
-        records = get_conversations(limit=20)
-
-        for record in records:
-            with st.expander(f"{record.prompt[:80]}..."):
-                st.write(record.answer or "No answer yet")
-                st.caption(f"⏱️ {record.response_time:.2f}s | 💰 ${record.cost:.4f}")
-    else:
-        st.info("No conversations yet. Ask a question in the chat!")
+        results = get_query_volume_by_date(
+            start_date=start_date,
+            end_date=end_date,
+            limit_days=max_days
+        )
+        
+        # Results is a dict with 'date' and 'query_count' keys, each containing lists
+        if isinstance(results, dict) and "date" in results:
+            date_list = results.get("date", [])
+            count_list = results.get("query_count", [])
+        else:
+            st.error(f"Could not load query volume: Invalid response format")
+        
+        if len(date_list) > 0:
+            # Create DataFrame with date as index for Plotly line chart
+            df = pd.DataFrame({"date": date_list, "query_count": count_list})
+            st.line_chart(df.set_index("date"))
+        else:
+            st.info("No query volume data available for selected date range.")
+    except Exception as e:
+        st.error(f"Could not load query volume: {e}")
+    
+    # 2. Average response time by hour (bar chart)
+    st.subheader("⏱️ Average Response Time by Hour")
+    try:
+        hour_list = []
+        rt_list = []
+        
+        results = get_response_time_by_hour(
+            start_date=start_date,
+            end_date=end_date,
+            limit_days=max_days
+        )
+        
+        # Results is a dict with 'hour' and 'avg_response_time_ms' keys, each containing lists
+        if isinstance(results, dict) and "hour" in results:
+            hour_list = results.get("hour", [])
+            rt_list = results.get("avg_response_time_ms", [])
+        else:
+            st.error(f"Could not load response time data: Invalid response format")
+        
+        if len(hour_list) > 0:
+            # Create DataFrame with hour as index for Plotly bar chart
+            df = pd.DataFrame({"hour": hour_list, "avg_response_time_ms": rt_list})
+            st.bar_chart(df.set_index("hour"))
+        else:
+            st.info("No response time data available for selected date range.")
+    except Exception as e:
+        st.error(f"Could not load response time data: {e}")
+    
+    # 3. Token usage breakdown (pie chart)
+    st.subheader("🔁 Token Usage Breakdown")
+    try:
+        tokens = get_token_usage_breakdown(
+            start_date=start_date,
+            end_date=end_date,
+            limit_days=max_days
+        )
+        if tokens["total_tokens"] > 0:
+            st.plotly_chart(
+                px.pie(
+                    values=[tokens['prompt_tokens'], tokens['completion_tokens']],
+                    names=['Prompt', 'Completion'],
+                    title='Token Distribution'
+                ),
+                width='stretch'
+            )
+            
+            # Display token counts
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Prompt Tokens", f"{tokens['prompt_tokens']:,.0f}")
+            with col2:
+                st.metric("Completion Tokens", f"{tokens['completion_tokens']:,.0f}")
+            with col3:
+                st.metric("Total Tokens", f"{tokens['total_tokens']:,.0f}")
+        else:
+            st.info("No token data available for selected date range.")
+    except Exception as e:
+        st.error(f"Could not load token usage: {e}")
+    
+    # 4. User feedback rate (gauge/bars)
+    st.subheader("👍 User Feedback Rate")
+    try:
+        from src.core.database import get_feedback_summary
+        feedback_data = get_feedback_rate(
+            start_date=start_date,
+            end_date=end_date,
+            limit_days=max_days
+        )
+        if feedback_data["total_feedback"] > 0:
+            # Create bar chart for feedback
+            feedback_df = pd.DataFrame([
+                {"label": "Thumbs Up", "value": feedback_data['up_count']},
+                {"label": "Thumbs Down", "value": feedback_data['down_count']},
+                {"label": "Neutral", "value": feedback_data['neutral_count']}
+            ])
+            
+            fig = go.Figure(data=[go.Bar(
+                x=feedback_df["label"],
+                y=feedback_df["value"]
+            )])
+            fig.update_layout(title="Feedback Distribution")
+            st.plotly_chart(fig, width='stretch')
+            
+            # Display satisfaction rate
+            sat_rate = feedback_data.get('satisfaction_rate', 0)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Satisfaction Rate", f"{sat_rate:.1f}%")
+            with col2:
+                st.metric("Total Feedback", feedback_data['total_feedback'])
+        else:
+            st.info("No feedback data available for selected date range.")
+    except Exception as e:
+        st.error(f"Could not load feedback data: {e}")
+    
+    # 5. Retrieval success rate (metric card)
+    st.subheader("🔍 Retrieval Success Rate")
+    try:
+        retrieval = get_retrieval_success_rate(
+            start_date=start_date,
+            end_date=end_date,
+            limit_days=max_days
+        )
+        if retrieval["total_queries"] > 0:
+            success_rate = retrieval.get('success_rate', 0)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Success Rate", f"{success_rate:.1f}%")
+            with col2:
+                st.metric("Total Retrieved", retrieval['successful_retrievals'])
+        else:
+            st.info("No retrieval data available for selected date range.")
+    except Exception as e:
+        st.error(f"Could not load retrieval data: {e}")
+    
+    # Recent conversations
+    st.subheader("📝 Recent Conversations")
+    try:
+        records = get_recent_conversations(limit=20)
+        if records and len(records) > 0:
+            # records are already dicts, no need for asdict()
+            df = pd.DataFrame(records)
+            
+            # Display as expandable cards
+            for _, record in df.iterrows():
+                with st.expander(f"{record['question'][:100]}..."):
+                    st.markdown(record.get('answer', 'No answer yet') or "")
+                    if record.get('response_time_ms'):
+                        st.caption(
+                            f"⏱️ {record['response_time_ms']/1000:.2f}s | "
+                            f"💰 ${record.get('cost', 0):.4f} | "
+                            f"🔗 Tokens: {record.get('total_tokens', 0):,}"
+                        )
+        else:
+            st.info("No conversations available.")
+    except Exception as e:
+        st.error(f"Could not load conversations: {e}")
 
 
 
@@ -324,7 +493,7 @@ elif page == "Monitoring":
 st.sidebar.markdown("---")
 st.sidebar.subheader("🗄️  Data Management")
 
-if st.sidebar.button("📂 Load Sample PDF Data", use_container_width=True):
+if st.sidebar.button("📂 Load Sample PDF Data", width='stretch'):
     persist_path = os.path.join(os.path.dirname(__file__), "data", "vector_store_index.pkl")
     try:
         from load_data import load_pdf_to_vectorstore
