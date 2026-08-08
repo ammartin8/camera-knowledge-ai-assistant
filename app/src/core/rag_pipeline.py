@@ -5,26 +5,9 @@ import time
 import threading
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-import logging
 
-from app.src.metrics import LLMCallRecord, save_record_to_db, calculate_cost
-from app.src.llm_client import LLM_SYSTEM_PROMPT
-
-logger = logging.getLogger(__name__)
-
-# Thread lock for metrics capture
-class _MetricsLock:
-    """Thread-safe context manager for metrics operations."""
-    def __init__(self):
-        self._lock = threading.Lock()
-    
-    def __enter__(self):
-        self._lock.acquire()
-    
-    def __exit__(self, *args):
-        self._lock.release()
-
-_metrics_lock = _MetricsLock()
+from src.metrics import LLMCallRecord, save_record_to_db, calculate_cost
+from src.llm_client import LLM_SYSTEM_PROMPT
 
 
 @dataclass
@@ -32,7 +15,7 @@ class RAGPipelineConfig:
     """Configuration for the RAG pipeline."""
     num_chunks: int = 5
     model: str = "llama3.2"
-    similarity_threshold: float = 0.7  # Used by embedding-based stores (ignored by Minsearch)
+    similarity_threshold: float = 0.7
     use_detailed_prompt: bool = True
 
 
@@ -40,7 +23,10 @@ class RAGPipeline:
     """RAG pipeline that orchestrates retrieval and response generation."""
 
     def __init__(
-        self, vector_store=None, llm_client=None, config: Optional[RAGPipelineConfig] = None
+        self,
+        vector_store=None,
+        llm_client=None,
+        config: Optional[RAGPipelineConfig] = None,
     ):
         """
         Initialize the RAG pipeline.
@@ -51,8 +37,6 @@ class RAGPipeline:
             config: Pipeline configuration (uses defaults if not provided)
         """
         self.config = config or RAGPipelineConfig()
-
-        # Initialize components with fallbacks
         self.vector_store = vector_store
 
         # Load LLM configuration from environment variables or .env file
@@ -72,9 +56,9 @@ class RAGPipeline:
             self.llm_client = OpenAILLMClient(
                 api_key=llm_api_key, base_url=llm_base_url, model=llm_model
             )
-            logger.info(f"Using LLM client with model: {llm_model}")
+            print(f"Using LLM client with model: {llm_model}")
         except ImportError:
-            logger.warning("OpenAI client not available, using mock for testing")
+            print("OpenAI client not available, using mock for testing")
             from ..llm_client import MockLLMClient
 
             self.llm_client = MockLLMClient(model=self.config.model)
@@ -94,7 +78,7 @@ class RAGPipeline:
         Returns:
             Dictionary containing answer, plain_answer, chunks_used, metadata, hallucination_check
         """
-        logger.info(f"Processing question: {question}")
+        print(f"Processing question: {question}")
 
         # Step 1: Retrieve relevant chunks
         retrieved_chunks = self._retrieve(question)
@@ -115,13 +99,12 @@ class RAGPipeline:
                 "answer": f"[ERROR] {llm_response}",
                 "plain_answer": llm_response,
                 "chunks_used": 0,
-                "citations": [],  # No citations on error
+                "citations": [],
                 "metadata": {"error": True},
                 "hallucination_check": None,
             }
 
         # Step 4: Format response with citations
-        # Ensure llm_response is a string (not LLMCallResult object)
         if isinstance(llm_response, dict) and 'response' in llm_response:
             answer_text = llm_response['response']
         elif hasattr(llm_response, 'response'):
@@ -133,349 +116,303 @@ class RAGPipeline:
             question=question, answer=answer_text, chunks_used=retrieved_chunks
         )
 
-        if "metadata" not in formatted:
-            formatted["metadata"] = {}
-        
-        # Add usage info from LLM call
-        if usage_info:
-            formatted["metadata"]["prompt_tokens"] = usage_info.get("prompt_tokens", 0)
-            formatted["metadata"]["completion_tokens"] = usage_info.get("completion_tokens", 0)
-            formatted["metadata"]["total_tokens"] = usage_info.get("total_tokens", 0)
-            formatted["metadata"]["cost"] = usage_info.get("cost", 0.0)
+        # Add usage info from LLM call BEFORE formatting (so it's preserved)
+        if usage_info is not None:
+            formatted["prompt_tokens"] = usage_info.get("prompt_tokens", 0) if isinstance(usage_info, dict) else getattr(usage_info, 'prompt_tokens', 0)
+            formatted["completion_tokens"] = usage_info.get("completion_tokens", 0) if isinstance(usage_info, dict) else getattr(usage_info, 'completion_tokens', 0)
+            formatted["total_tokens"] = usage_info.get("total_tokens", 0) if isinstance(usage_info, dict) else getattr(usage_info, 'total_tokens', 0)
+            formatted["cost"] = usage_info.get("cost", 0.0) if isinstance(usage_info, dict) else getattr(usage_info, 'cost', 0.0)
         
         # Handle None case
         safe_chunks = retrieved_chunks if retrieved_chunks else []
-        formatted["metadata"]["num_chunks_used"] = len(safe_chunks)
-
+        formatted["chunks_used"] = len(safe_chunks)
+        
+        # Add citations to metadata for display
+        formatted["citations"] = formatted.get("citations", [])
+        
         return formatted
 
     def _retrieve(self, question: str) -> List[Dict[str, Any]]:
         """Retrieve relevant chunks from the vector store."""
-        logger.info(f"🔍 Retrieving chunks for question: {question}")
+        print(f"\n🔍 RETRIEVE: Question = '{question}'")
 
         if not self.vector_store:
-            logger.warning("❌ No vector store configured - cannot retrieve chunks")
+            print("❌ No vector store configured!")
             return []
 
         # For MinsearchVectorStore (keyword-based), use direct text search
         if self.vector_store.__class__.__name__ == "MinsearchVectorStore":
-            logger.info(f"   Using Minsearch keyword search")
+            print(f"   Using Minsearch keyword search")
+            
+            # Debug: Check vector store state
+            num_docs = len(self.vector_store._documents) if hasattr(self.vector_store, '_documents') else 0
+            print(f"   Vector store has {num_docs} documents in memory")
 
-            # Use keyword-based search - trust minsearch ranking
             all_results = self.vector_store.search(question, num_results=self.config.num_chunks * 3)
             
-                
-            # Handle None or empty case from minsearch
+            print(f"   Search returned {len(all_results)} raw results from minsearch")
+
             if not all_results:
-                logger.warning("   ⚠️ Minsearch returned no results")
+                print("   ⚠️ Minsearch returned no results")
                 return []
 
-            logger.info(f"   📊 Found {len(all_results)} raw results from minsearch")
-
             # Trust minsearch's TF-IDF ranking and take top N directly
-            # No need for additional filtering - minsearch already provides relevant results
             results = all_results[:self.config.num_chunks]
 
-            logger.info(f"   ✅ Final retrieval: {len(results)} chunks found")
+            print(f"   ✅ Final retrieval: {len(results)} chunks found")
             
             # Convert minsearch results to chunk format with metadata
             chunks = []
             for result in results:
                 text = result.get('text', '') if isinstance(result, dict) else str(result)
                 metadata = result.get('metadata', {}) if isinstance(result, dict) else {}
-                
+
                 chunks.append({
                     "text": text,
                     "_match_count": 0,
                     "metadata": {
                         "source": metadata.get("source", ""),
-                        "page": metadata.get("page", 0),
-                        "section_path": str(metadata.get("section_path", [])),
+                        "chunk_id": str(metadata.get("chunk_id", "")),
                     },
                 })
 
-            
-            logger.info(f"   ✅ Returning {len(chunks)} chunks")
-            return chunks
-        else:
-            # Fallback: use keyword search directly (MinsearchVectorStore default behavior)
-            results = self.vector_store.search(question, num_results=self.config.num_chunks)
-            
-            # Handle None case
-            if results is None or len(results) == 0:
-                return []
-
-            # Convert results to dictionary format with metadata
-            chunks = []
-            for result in results:
-                # Handle both Document objects and dict formats
-                if hasattr(result, "metadata"):
-                    chunk_dict = {
-                        "text": result.text,
-                        "_match_count": result.get("_match_count", 0) if isinstance(result, dict) else getattr(result, "_match_count", 0),
-                        "metadata": {
-                            "source": result.metadata.get("source", ""),
-                            "page": result.metadata.get("page", 0),
-                            "section_path": str(result.metadata.get("section_path", [])),
-                        },
-                    }
-                else:
-                    chunk_dict = {
-                        "text": result.get("text", ""),
-                        "_match_count": result.get("_match_count", 0) if isinstance(result, dict) else getattr(result, "_match_count", 0),
-                        "metadata": result.get("metadata", {}),
-                    }
-                chunks.append(chunk_dict)
-
+            print(f"   📄 Converted to {len(chunks)} formatted chunks")
             return chunks
 
-    def _retrieve_with_limit(self, question: str, limit: int) -> List[Dict[str, Any]]:
-        """Retrieve chunks with explicit limit (used by search method)."""
-        logger.info(f"🔍 Retrieving up to {limit} chunks for: {question}")
-
-        if not self.vector_store:
-            logger.warning("❌ No vector store configured")
-            return []
-
-        # For MinsearchVectorStore, use keyword-based search
-        if self.vector_store.__class__.__name__ == "MinsearchVectorStore":
-            logger.info(f"   Using Minsearch keyword search")
-
-            # Get top N results directly - trust minsearch ranking
-            results = self.vector_store.search(question, num_results=limit)
-            
-            # Handle None case
-            if results is None:
-                logger.warning("   ⚠️ Minsearch returned None results")
-                return []
-            
-            logger.info(f"   ✅ Got {len(results)} results")
-        else:
-            # Fallback: use keyword search directly (MinsearchVectorStore default behavior)
-            results = self.vector_store.search(question, num_results=limit)
-
-            if not results:
-                return []
-
-            # Convert to dict format
-            chunks = []
-            for result in results:
-                if hasattr(result, "metadata"):
-                    chunk_dict = {
-                        "text": result.text,
-                        "_match_count": result.get("_match_count", 0) if isinstance(result, dict) else getattr(result, "_match_count", 0),
-                        "metadata": {
-                            "source": result.metadata.get("source", ""),
-                            "page": result.metadata.get("page", 0),
-                            "section_path": str(result.metadata.get("section_path", [])),
-                        },
-                    }
-                else:
-                    chunk_dict = {
-                        "text": result.get("text", ""),
-                        "_match_count": result.get("_match_count", 0) if isinstance(result, dict) else getattr(result, "_match_count", 0),
-                        "metadata": result.get("metadata", {}),
-                    }
-                chunks.append(chunk_dict)
-
-            return chunks
+        # Fallback for other vector store types
+        print(f"Unknown vector store type: {type(self.vector_store).__name__}")
+        return []
 
     def _build_prompt(self, question: str, chunks: List[Dict[str, Any]]) -> str:
-        """Build the prompt with context from retrieved chunks."""
-        # Format chunks for the prompt template
-        formatted_chunks = []
-        total_chars = 0
-        max_length = 5000
-        
+        """Build prompt with context from retrieved chunks."""
+        print("Building prompt with context")
+
+        # Build context string from chunks
+        context_parts = []
         for chunk in chunks:
             text = chunk.get("text", "")
             metadata = chunk.get("metadata", {})
             
-            # Truncate very long chunks
-            if text and len(text) > 2000:
-                text = text[:2000] + "..."
-
-            # Build citation info
-            citations = []
-            if metadata.get("page"):
-                citations.append(f"Page {metadata['page']}")
-            if metadata.get("section_title"):
-                citations.append(metadata['section_title'])
-            if metadata.get("source"):
-                citations.append(metadata['source'])
+            source = metadata.get("source", "unknown")
+            chunk_id = metadata.get("chunk_id", "0")
             
-            citation_str = ", ".join(citations) if citations else "No citation info"
-            
-            # Add chunk with citation marker
-            chunk_entry = f"""
---- Result ---
-Source: {citation_str}
+            context_parts.append(f"[Source: {source}, ID: {chunk_id}]\n{text}")
 
-{text}
+        context = "\n\n".join(context_parts)
 
---- End Result ---
-""".strip()
-            
-            formatted_chunks.append(chunk_entry)
-            total_chars += len(chunk_entry) + 100  # Add buffer
-        
-        # Truncate if needed
-        context = formatted_chunks[0] if formatted_chunks else "No context available."
-        remaining = sum(len(c) for c in formatted_chunks[1:])
-        if remaining > max_length - len(context):
-            # Trim subsequent chunks
-            for chunk_entry in formatted_chunks[1:]:
-                if total_chars + len(chunk_entry) <= max_length:
-                    context += "\n\n" + chunk_entry
-                else:
-                    # Truncate this chunk
-                    remaining_chars = max_length - len(context)
-                    context += "\n\n" + chunk_entry[:remaining_chars]
-                    break
-        
-        # Use PROMPT_TEMPLATE_DETAILED for the prompt
-        prompt = f"""QUESTION: {question}
+        # Choose prompt template based on config
+        if self.config.use_detailed_prompt:
+            return self._build_detailed_prompt(question, context)
+        else:
+            return self._build_simple_prompt(question, context)
 
-CONTEXT:
+    def _build_detailed_prompt(self, question: str, context: str) -> str:
+        """Build detailed prompt with system instructions."""
+        system_instruction = """You are an AI assistant specialized in camera equipment knowledge. 
+Your role is to provide accurate, helpful information about cameras, lenses, accessories, and photography techniques.
+
+When answering questions:
+1. Be specific and precise - give exact details when possible
+2. Cite sources from the provided context when relevant
+3. If you don't know something, admit it rather than making things up
+4. Keep answers concise but complete"""
+
+        return f"""You are an AI assistant specialized in camera equipment knowledge.
+
+User Question: {question}
+
+Context (from retrieved documents):
 {context}
 
-Please provide a comprehensive answer to the question using ONLY the information from the context above.
+Instructions:
+- Be specific and precise - give exact details when possible
+- Cite sources from the provided context when relevant  
+- If you don't know something, admit it rather than making things up
+- Keep answers concise but complete
 
-Your response should:
-1. Directly address the question with clear, accurate information
-2. Explain technical concepts in accessible language when necessary
-3. Include step-by-step instructions if the question asks 'how to' do something
-4. Reference specific sections of the manual where applicable (e.g., 'According to the ISO Settings section...')
-5. Be honest about limitations - if information is not in the context, say so
+Provide your answer below:"""
 
-IMPORTANT: Do not make up information or add details that are not in the provided context.
-"""
-        return prompt
+    def _build_simple_prompt(self, question: str, context: str) -> str:
+        """Build simple prompt with minimal instructions."""
+        return f"""User Question: {question}
+
+Context:
+{context}
+
+Answer:"""
 
     def _generate_response(self, prompt: str) -> tuple:
-        """Generate response using LLM.
-        
-        Returns:
-            Tuple of (response_text, usage_info) where usage_info contains
-            token counts and cost if available, or None for mock client
-        """
-        from ..llm_client import LLMCallResult
+        """Generate response using LLM."""
+        print("Generating response")
+        start_time = time.time()
 
         try:
-            # Get the response - handle both string and LLMCallResult objects
-            raw_output = self.llm_client.generate_response(prompt)
-
-            usage_info = None
-            if isinstance(raw_output, LLMCallResult):
-                llm_output = raw_output.response  # Use the response directly (already a string)
-                usage_info = {
-                    "prompt_tokens": int(raw_output.usage.prompt_tokens),
-                    "completion_tokens": int(raw_output.usage.completion_tokens),
-                    "total_tokens": int(raw_output.usage.total_tokens),
-                    "cost": float(raw_output.cost),
-                }
+            result = self.llm_client.chat(prompt)
+            
+            duration = time.time() - start_time
+            
+            # Extract response and usage info
+            if isinstance(result, dict):
+                response_text = result.get('response', str(result))
+                usage_info = result.get('usage', {})
+            elif hasattr(result, 'response'):
+                response_text = result.response
+                # Handle both LLMCallResult (has .usage attribute) and other objects
+                if hasattr(result, 'usage'):
+                    usage_data = getattr(result, 'usage')
+                    # Convert TokenUsage dataclass to dict if needed
+                    if hasattr(usage_data, 'prompt_tokens'):
+                        usage_info = {
+                            'prompt_tokens': usage_data.prompt_tokens,
+                            'completion_tokens': usage_data.completion_tokens,
+                            'total_tokens': usage_data.total_tokens,
+                        }
+                    else:
+                        usage_info = {}
+                else:
+                    usage_info = {}
             else:
-                llm_output = str(raw_output)
+                response_text = str(result)
+                usage_info = {}
 
-            return llm_output, usage_info
+            print(f"✅ Response generated in {duration:.2f}s")
+            
+            return response_text, usage_info
 
         except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            return "[ERROR] LLM generation failed: " + str(e), None
+            print(f"❌ Generation failed: {str(e)}")
+            raise
 
     def _handle_no_results(self, question: str) -> Dict[str, Any]:
         """Handle case when no chunks were retrieved."""
+        print("No relevant chunks found - providing general answer")
+
+        if self.config.use_detailed_prompt:
+            prompt = f"""You are an AI assistant specialized in camera equipment knowledge.
+
+User Question: {question}
+
+I don't have specific documents to reference, but I can help with general camera knowledge. Please provide your best answer based on your training."""
+        else:
+            prompt = f"""User Question: {question}
+
+Answer:"""
+
+        try:
+            llm_response, _ = self._generate_response(prompt)
+            
+            return {
+                "answer": llm_response,
+                "plain_answer": llm_response,
+                "chunks_used": 0,
+                "citations": [],
+                "metadata": {"no_chunks_found": True},
+                "hallucination_check": None,
+            }
+        except Exception as e:
+            print(f"Failed to generate fallback response: {str(e)}")
+            return {
+                "answer": "I'm sorry, I couldn't find relevant information for your question.",
+                "plain_answer": "I'm sorry, I couldn't find relevant information for your question.",
+                "chunks_used": 0,
+                "citations": [],
+                "metadata": {"error": True},
+                "hallucination_check": None,
+            }
+
+    def search(self, query: str) -> List[Dict[str, Any]]:
+        """Perform a vector store search."""
+        if not self.vector_store:
+            print("No vector store configured")
+            return []
+        
+        return self.vector_store.search(query, num_results=5)
+
+    def get_stats(self):
+        """Get pipeline statistics (placeholder for future implementation)."""
         return {
-            "answer": f"[LIMITATION] I don't have information about '{question}' in my current knowledge base.",
-            "plain_answer": f"I don't have information about '{question}'. Based on the provided context from the official Canon EOS R6 Mark II manual, there is no relevant information regarding this specific topic. Therefore, I cannot provide details without making up information outside of the supplied documentation.",
-            "chunks_used": [],
-            "citations": [],  # No citations when no chunks retrieved
-            "metadata": {"error": True, "reason": "no_chunks_retrieved"},
-            "hallucination_check": None,
+            "config": asdict(self.config) if hasattr(self.config, '__dict__') else str(self.config),
+            "vector_store_type": type(self.vector_store).__name__ if self.vector_store else None,
+            "llm_client_type": type(self.llm_client).__name__ if self.llm_client else None,
         }
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get pipeline statistics."""
-        return {
-            "num_chunks_configured": self.config.num_chunks,
-            "model": self.config.model,
-            "similarity_threshold": self.config.similarity_threshold,
-            "vector_store_type": type(self.vector_store).__name__ if self.vector_store else "None",
-        }
 
-    def search(self, question: str, num_chunks: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Public method to retrieve chunks with optional limit."""
-        # Use passed num_chunks or fall back to config default
-        effective_num_chunks = num_chunks if num_chunks is not None else self.config.num_chunks
-
-        # Call _retrieve but override the limit
-        return self._retrieve_with_limit(question, effective_num_chunks)
+def asdict(obj):
+    """Convert object to dictionary."""
+    if hasattr(obj, '__dict__'):
+        return obj.__dict__
+    return str(obj)
 
 
 class RAGWithMetrics(RAGPipeline):
-    """RAG pipeline with automatic metrics capture for monitoring dashboard.
-    
-    Subclasses RAGPipeline to automatically record every LLM call using
-    the LLMCallRecord dataclass and saves it to the database. This ensures
-    all queries are tracked without requiring changes in the chat application.
-    """
-    
-    def __init__(self, vector_store=None, llm_client=None, config: Optional[RAGPipelineConfig] = None):
-        """Initialize RAGWithMetrics pipeline."""
-        # Use default LLM client if not provided (parent class handles this)
-        super().__init__(vector_store=vector_store, llm_client=None, config=config)
-        self.last_call: Optional[LLMCallRecord] = None
-    
-    def _generate_response(self, prompt: str) -> tuple:
-        """Generate response with metrics capture.
-        
-        Overrides parent method to capture call metrics at the source of truth.
-        Preserves original response for compatibility with existing code.
-        
-        Args:
-            prompt: The full prompt including question and context
-            
-        Returns:
-            Tuple of (response_text, usage_info) - same as parent method
+    """RAG pipeline with metrics collection and database recording."""
+
+    def __init__(
+        self,
+        vector_store=None,
+        llm_client=None,
+        config: Optional[RAGPipelineConfig] = None,
+        db_connection=None,
+    ):
         """
+        Initialize RAG pipeline with metrics tracking.
+
+        Args:
+            vector_store: Vector store instance for retrieval
+            llm_client: LLM client instance for generation
+            config: Pipeline configuration
+            db_connection: Database connection for metrics storage
+        """
+        super().__init__(vector_store=vector_store, llm_client=llm_client, config=config)
+        self.db_connection = db_connection
+
+    def run(self, question: str) -> Dict[str, Any]:
+        """Run pipeline and record metrics to database."""
         start_time = time.time()
-        llm_output, usage_info = super()._generate_response(prompt)
-        response_time = time.time() - start_time
-        
-        # Extract model from config
-        model = self.config.model
-        
-        # Get instructions if available (from llm_client attribute if it exists)
-        instructions = getattr(self.llm_client, 'system_prompt', "") or ""
-        
-        # Handle missing usage_info (mock client case)
-        if usage_info:
-            prompt_tokens = usage_info.get("prompt_tokens", 0)
-            completion_tokens = usage_info.get("completion_tokens", 0)
-            total_tokens = usage_info.get("total_tokens", 0)
-            cost = usage_info.get("cost", 0.0)
-        else:
-            # Calculate cost for mock client with estimated tokens
-            prompt_tokens = 0
-            completion_tokens = 0
-            total_tokens = 0
-            cost = calculate_cost(prompt_tokens, completion_tokens)
-        
-        call_record = LLMCallRecord(
-            model=model,
-            prompt=prompt,  # Full prompt (question + context)
-            instructions=instructions,  # System prompts from llm_client
-            answer=llm_output,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            response_time=response_time,
-            cost=cost,
-        )
-        
-        # Save to database with thread safety
-        with _metrics_lock:
-            save_record_to_db(call_record)
-            self.last_call = call_record
-        
-        return llm_output, usage_info
+
+        try:
+            # Run the pipeline
+            result = super().run(question)
+            
+            duration = time.time() - start_time
+            
+            # Record metrics if database connection available
+            if self.db_connection:
+                self._record_metrics(question, result, duration, start_time)
+            
+            return result
+
+        except Exception as e:
+            print(f"Pipeline execution failed: {str(e)}")
+            raise
+
+    def _record_metrics(self, question: str, result: Dict[str, Any], 
+                       duration: float, start_time: float):
+        """Record metrics to database."""
+        try:
+            # Calculate tokens from metadata if available
+            prompt_tokens = result.get("metadata", {}).get("prompt_tokens", 0)
+            completion_tokens = result.get("metadata", {}).get("completion_tokens", 0)
+            cost = result.get("metadata", {}).get("cost", 0.0)
+
+            # Create metrics record
+            record = LLMCallRecord(
+                query=question,
+                response=result.get("answer", ""),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+                cost=cost,
+                duration_ms=duration * 1000,
+                timestamp=start_time,
+            )
+
+            # Save to database
+            with _metrics_lock:
+                save_record_to_db(record, self.db_connection)
+            
+            print(f"✅ Metrics recorded: {prompt_tokens} prompt, {completion_tokens} completion tokens")
+
+        except Exception as e:
+            print(f"Failed to record metrics: {str(e)}")
+            # Don't fail the pipeline if metrics recording fails

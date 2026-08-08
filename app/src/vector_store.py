@@ -10,6 +10,7 @@ Minsearch is chosen for MVP because:
 - Follows LLM Zoomcamp patterns more closely
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
@@ -138,6 +139,7 @@ class MinsearchVectorStore(VectorStoreInterface):
         if docs_list:
             # Build the index with ALL documents
             self.index.fit(docs_list)
+            print(f"✅ Rebuilt index with {len(docs_list)} documents")
     
     def save_to_disk(self):
         """Save index and documents to disk."""
@@ -162,10 +164,6 @@ class MinsearchVectorStore(VectorStoreInterface):
     def add_documents(self, documents: List[Document]) -> int:
         """Add documents to the vector store.
         
-        Note: Documents are stored in memory but NOT added to search index immediately.
-        The index is rebuilt at app startup with all loaded documents.
-        For new documents to be searchable, restart the application.
-
         Args:
             documents: List of Document objects with text and metadata
 
@@ -178,6 +176,10 @@ class MinsearchVectorStore(VectorStoreInterface):
         
         count = len(documents)
         
+        # Rebuild index immediately so documents are searchable
+        if self._documents:
+            self._rebuild_index()
+        
         # Save to disk if persistence is enabled
         if hasattr(self, 'persist_path'):
             self.save_to_disk()
@@ -187,13 +189,19 @@ class MinsearchVectorStore(VectorStoreInterface):
     def search(self, query: str, num_results: int = 5) -> List[Dict[str, Any]]:
         """Search for relevant documents using TF-IDF keyword matching."""
         
+        # Debug: Check if index has any data
+        print(f"DEBUG: Searching '{query}' with {len(self._documents)} documents loaded")
+        print(f"DEBUG: Index type: {type(self.index)}")
+        
         # Perform search with boost for text field
         results = self.index.search(
             query,
             boost_dict={"text": 3.0},
             num_results=num_results,
         )
-
+        
+        print(f"DEBUG: Search returned {len(results)} raw results")
+        
         # Convert minsearch results to our document format
         
         doc_results = []

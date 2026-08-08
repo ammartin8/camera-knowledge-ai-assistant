@@ -2,6 +2,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 
 def load_pdf_to_vectorstore(pdf_path: str, vector_store=None):
@@ -15,6 +16,11 @@ def load_pdf_to_vectorstore(pdf_path: str, vector_store=None):
     Returns:
         Number of chunks loaded
     """
+    # Ensure proper Python path setup for imports
+    app_root = Path(__file__).parent.resolve()
+    sys.path.insert(0, str(app_root.parent))  # Add project root
+    sys.path.insert(0, str(app_root))  # Add app directory
+    
     # Import here to avoid conflicts
     from src.pipeline import BasicPDFIngestor
     
@@ -60,7 +66,7 @@ def load_pdf_to_vectorstore(pdf_path: str, vector_store=None):
         else:
             from src.vector_store import MinsearchVectorStore
             # Use persistence so data survives between app restarts
-            persist_path = os.path.join(os.path.dirname(__file__), "data", "vector_store_index.pkl")
+            persist_path = str(app_root / "data" / "vector_store_index.pkl")
             # Create data directory if it doesn't exist
             os.makedirs(os.path.dirname(persist_path), exist_ok=True)
             vs = MinsearchVectorStore(persist_path=persist_path)
@@ -72,8 +78,13 @@ def load_pdf_to_vectorstore(pdf_path: str, vector_store=None):
 
 def main():
     """Load all available PDFs into the vector store."""
+    # Ensure proper Python path setup
+    app_root = Path(__file__).parent.resolve()
+    sys.path.insert(0, str(app_root.parent))  # Add project root
+    sys.path.insert(0, str(app_root))  # Add app directory
+    
     # Ensure data directory exists before loading
-    persist_path = os.path.join(os.path.dirname(__file__), "data", "vector_store_index.pkl")
+    persist_path = str(app_root / "data" / "vector_store_index.pkl")
     os.makedirs(os.path.dirname(persist_path), exist_ok=True)
     
     # Debug: Check current directory

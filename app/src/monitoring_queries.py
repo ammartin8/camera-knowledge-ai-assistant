@@ -8,7 +8,7 @@ Provides database queries for monitoring dashboard including:
 - Retrieval success rate
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Dict, Any, Optional
 import psycopg
@@ -75,6 +75,9 @@ def get_query_volume_by_date(
     Returns:
         Dictionary with 'date' list and 'query_count' list (may be empty)
     """
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    
     if start_date is None:
         start_date = end_date - timedelta(days=limit_days)
     
@@ -124,6 +127,9 @@ def get_response_time_by_hour(
     Returns:
         Dictionary with 'hour' list and 'avg_response_time_ms' list (may be empty)
     """
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    
     if start_date is None:
         start_date = end_date - timedelta(days=limit_days)
     
@@ -177,6 +183,9 @@ def get_token_usage_breakdown(
     Returns:
         Dictionary with 'prompt_tokens', 'completion_tokens', 'total_tokens'
     """
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    
     if start_date is None:
         start_date = end_date - timedelta(days=limit_days)
     
@@ -200,11 +209,7 @@ def get_token_usage_breakdown(
     prompt_total = int(row["prompt_total"]) or 0
     completion_total = int(row["completion_total"]) or 0
     
-    return {
-        "prompt_tokens": prompt_total,
-        "completion_tokens": completion_total,
-        "total_tokens": prompt_total + completion_total,
-    }
+    return ["Prompt Tokens", prompt_total, "Completion Tokens", completion_total]
 
 
 def get_feedback_rate(
@@ -222,6 +227,9 @@ def get_feedback_rate(
     Returns:
         Dictionary with up_count, down_count, neutral_count, satisfaction_rate
     """
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    
     if start_date is None:
         start_date = end_date - timedelta(days=limit_days)
     
@@ -276,6 +284,9 @@ def get_retrieval_success_rate(
     Returns:
         Dictionary with total_queries, successful_retrievals, success_rate
     """
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    
     if start_date is None:
         start_date = end_date - timedelta(days=limit_days)
     
@@ -321,6 +332,9 @@ def get_aggregate_stats(
     Returns:
         Dictionary with total_queries, avg_response_time, total_cost, avg_tokens
     """
+    if end_date is None:
+        end_date = datetime.now(timezone.utc)
+    
     if start_date is None:
         start_date = end_date - timedelta(days=limit_days)
     
@@ -329,7 +343,7 @@ def get_aggregate_stats(
             COUNT(*) as total_queries,
             AVG(response_time_ms) as avg_response_time_ms,
             SUM(cost) as total_cost,
-            AVG(total_tokens) as avg_total_tokens
+            SUM(total_tokens) as total_tokens
         FROM queries
         WHERE timestamp AT TIME ZONE 'UTC' >= %s
           AND timestamp AT TIME ZONE 'UTC' <= %s
@@ -340,7 +354,7 @@ def get_aggregate_stats(
             "total_queries": 0,
             "avg_response_time_ms": 0.0,
             "total_cost": 0.0,
-            "avg_total_tokens": 0.0,
+            "total_tokens": 0,
         }
     
     row = results[0]
@@ -348,7 +362,7 @@ def get_aggregate_stats(
         "total_queries": int(row.get("total_queries", 0)),
         "avg_response_time_ms": float(row.get("avg_response_time_ms") or 0.0),
         "total_cost": float(row.get("total_cost") or 0.0),
-        "avg_total_tokens": float(row.get("avg_total_tokens") or 0.0),
+        "total_tokens": int(row.get("total_tokens") or 0),
     }
 
 

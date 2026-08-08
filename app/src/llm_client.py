@@ -87,6 +87,20 @@ class LLMClientInterface(ABC):
         pass
 
     @abstractmethod
+    def chat(self, prompt: str) -> LLMCallResult:
+        """Generate a response using chat completions API.
+
+        Alias for generate_response() to match RAG pipeline interface.
+
+        Args:
+            prompt: The prompt to send to the LLM
+
+        Returns:
+            LLMCallResult with response text and usage metrics
+        """
+        pass
+
+    @abstractmethod
     def count_tokens(self, text: str) -> int:
         """Count tokens in a text string.
 
@@ -133,6 +147,13 @@ class MockLLMClient(LLMClientInterface):
             response_time_ms=response_time * 1000,
             cost=0.0
         )
+
+    def chat(self, prompt: str) -> LLMCallResult:
+        """Generate a response using chat completions API.
+
+        Alias for generate_response() to match RAG pipeline interface.
+        """
+        return self.generate_response(prompt)
 
     def count_tokens(self, text: str) -> int:
         """Count tokens using rough estimation (4 chars per token)."""
@@ -250,6 +271,13 @@ class OpenAILLMClient(LLMClientInterface):
                 response_time_ms=0,
                 cost=0.0
             )
+
+    def chat(self, prompt: str) -> LLMCallResult:
+        """Generate a response using chat completions API.
+
+        Alias for generate_response() to match RAG pipeline interface.
+        """
+        return self.generate_response(prompt)
 
     def count_tokens(self, text: str) -> int:
         """Count tokens using OpenAI's tokenizer for accuracy.

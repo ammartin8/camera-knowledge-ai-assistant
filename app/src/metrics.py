@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from logging import getLogger
 
-import psycopg
+# DISABLED: import psycopg
 
 logger = getLogger(__name__)
 
