@@ -116,6 +116,7 @@ class MockLLMClient(LLMClientInterface):
 
     def __init__(self, model: str = "llama3.2"):
         self.model = model
+        self.system_prompt = LLM_SYSTEM_PROMPT
 
     def generate_response(self, prompt: str) -> LLMCallResult:
         """Generate a mock response."""
@@ -186,6 +187,7 @@ class OpenAILLMClient(LLMClientInterface):
         self.api_key = api_key or os.getenv("LLM_API_KEY", "ollama")
         self.base_url = base_url or os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
         self.model = model or os.getenv("LLM_MODEL", "llama3.2")
+        self.system_prompt = LLM_SYSTEM_PROMPT
         
         try:
             from openai import OpenAI

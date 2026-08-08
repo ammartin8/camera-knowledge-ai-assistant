@@ -1,11 +1,30 @@
 """RAG Pipeline orchestrates retrieval, context building, and response generation."""
 
 import os
+import time
+import threading
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import logging
 
+from app.src.metrics import LLMCallRecord, save_record_to_db, calculate_cost
+from app.src.llm_client import LLM_SYSTEM_PROMPT
+
 logger = logging.getLogger(__name__)
+
+# Thread lock for metrics capture
+class _MetricsLock:
+    """Thread-safe context manager for metrics operations."""
+    def __init__(self):
+        self._lock = threading.Lock()
+    
+    def __enter__(self):
+        self._lock.acquire()
+    
+    def __exit__(self, *args):
+        self._lock.release()
+
+_metrics_lock = _MetricsLock()
 
 
 @dataclass
@@ -391,3 +410,72 @@ IMPORTANT: Do not make up information or add details that are not in the provide
 
         # Call _retrieve but override the limit
         return self._retrieve_with_limit(question, effective_num_chunks)
+
+
+class RAGWithMetrics(RAGPipeline):
+    """RAG pipeline with automatic metrics capture for monitoring dashboard.
+    
+    Subclasses RAGPipeline to automatically record every LLM call using
+    the LLMCallRecord dataclass and saves it to the database. This ensures
+    all queries are tracked without requiring changes in the chat application.
+    """
+    
+    def __init__(self, vector_store=None, llm_client=None, config: Optional[RAGPipelineConfig] = None):
+        """Initialize RAGWithMetrics pipeline."""
+        # Use default LLM client if not provided (parent class handles this)
+        super().__init__(vector_store=vector_store, llm_client=None, config=config)
+        self.last_call: Optional[LLMCallRecord] = None
+    
+    def _generate_response(self, prompt: str) -> tuple:
+        """Generate response with metrics capture.
+        
+        Overrides parent method to capture call metrics at the source of truth.
+        Preserves original response for compatibility with existing code.
+        
+        Args:
+            prompt: The full prompt including question and context
+            
+        Returns:
+            Tuple of (response_text, usage_info) - same as parent method
+        """
+        start_time = time.time()
+        llm_output, usage_info = super()._generate_response(prompt)
+        response_time = time.time() - start_time
+        
+        # Extract model from config
+        model = self.config.model
+        
+        # Get instructions if available (from llm_client attribute if it exists)
+        instructions = getattr(self.llm_client, 'system_prompt', "") or ""
+        
+        # Handle missing usage_info (mock client case)
+        if usage_info:
+            prompt_tokens = usage_info.get("prompt_tokens", 0)
+            completion_tokens = usage_info.get("completion_tokens", 0)
+            total_tokens = usage_info.get("total_tokens", 0)
+            cost = usage_info.get("cost", 0.0)
+        else:
+            # Calculate cost for mock client with estimated tokens
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            cost = calculate_cost(prompt_tokens, completion_tokens)
+        
+        call_record = LLMCallRecord(
+            model=model,
+            prompt=prompt,  # Full prompt (question + context)
+            instructions=instructions,  # System prompts from llm_client
+            answer=llm_output,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            response_time=response_time,
+            cost=cost,
+        )
+        
+        # Save to database with thread safety
+        with _metrics_lock:
+            save_record_to_db(call_record)
+            self.last_call = call_record
+        
+        return llm_output, usage_info
